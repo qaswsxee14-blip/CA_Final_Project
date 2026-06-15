@@ -111,16 +111,13 @@ int main()
     std::cout << "\n[驗證資料]" << std::endl;
     std::cout << "Preamble[0] = " << PREAMBLE[0] << std::endl;
 
-    // Part 1 只處理第 0 組 pattern
     const float *rx_pattern_0 = &RX_SIGNALS[0 * RX_LEN];
 
     std::cout << "Rx_Signal_0[0] = " << rx_pattern_0[0] << std::endl;
     std::cout << "Pattern 0 的正確前導碼起始位置: " << GROUND_TRUTH[0] << std::endl;
 
-    // sliding window 數量
     int num_windows = RX_LEN - PREAMBLE_LEN + 1;
 
-    // 儲存每個 window 的 correlation 結果
     float *correlation_result = new float[num_windows];
 
     float max_corr = -1e9f;
@@ -165,7 +162,6 @@ int main()
         float sum = sum0 + sum1 + sum2 + sum3 +
                     sum4 + sum5 + sum6 + sum7;
 
-        // 處理 PREAMBLE_LEN 不是 8 的倍數時剩下的部分
         for (; j < PREAMBLE_LEN; ++j)
         {
             sum += pre[j] * rxw[j];
