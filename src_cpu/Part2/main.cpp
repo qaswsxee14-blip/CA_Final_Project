@@ -309,19 +309,6 @@ int main()
 
     auto st = std::chrono::high_resolution_clock::now();
 
-    // ---------------------------------------------------------
-    // Part 2: RVV Vector Reduction
-    //
-    // 每個 output window：
-    // 1. 用 v24 當 vector accumulator
-    // 2. 用 vfmacc.vv 做 vector multiply-accumulate
-    // 3. 最後只做一次 vfredusum.vs
-    //
-    // 重點：
-    // v24 初始化、累加、reduction 都放在同一個 asm block
-    // 避免跨 asm block 保留 vector register 的疑慮
-    // ---------------------------------------------------------
-
     for (int i = 0; i < num_windows; ++i)
     {
         const float *ptr_p = PREAMBLE;
@@ -340,51 +327,33 @@ int main()
             "mv t1, %[ptr_rx]                        \n\t"
             "mv t2, %[len]                           \n\t"
 
-            // 先用 len 設定一次 VL，得到 vlmax，存在 t4
-            // 並把 vector accumulator v24 初始化成 0
             "vsetvli t4, t2, e32, m1, ta, ma          \n\t"
             "flw f0, (%[zero_ptr])                    \n\t"
             "vfmv.v.f v24, f0                         \n\t"
 
-            // 如果 len = 0，直接跳到 reduction
             "beqz t2, 2f                              \n\t"
 
-            // -----------------------------
-            // loop:
-            // 每次處理 vl 個 float
-            // v24 += preamble * rx
-            // -----------------------------
             "1:                                       \n\t"
             "vsetvli t3, t2, e32, m1, ta, ma          \n\t"
 
-            // v8  = PREAMBLE chunk
-            // v16 = RX chunk
             "vle32.v v8, (t0)                         \n\t"
             "vle32.v v16, (t1)                        \n\t"
 
-            // v24 = v24 + v8 * v16
             "vfmacc.vv v24, v8, v16                   \n\t"
 
-            // pointer += vl * sizeof(float)
             "slli t5, t3, 2                           \n\t"
             "add t0, t0, t5                           \n\t"
             "add t1, t1, t5                           \n\t"
 
-            // remain -= vl
             "sub t2, t2, t3                           \n\t"
             "bnez t2, 1b                              \n\t"
 
-            // -----------------------------
-            // reduction:
-            // 把 VL 設回 vlmax，確保 v24 所有累加 lane 都參與 reduction
-            // -----------------------------
             "2:                                       \n\t"
             "vsetvli zero, t4, e32, m1, ta, ma        \n\t"
             "flw f0, (%[zero_ptr])                    \n\t"
             "vfmv.s.f v0, f0                          \n\t"
             "vfredusum.vs v0, v24, v0                 \n\t"
 
-            // final_sum = v0[0]
             "vfmv.f.s f1, v0                          \n\t"
             "fsw f1, (%[out_ptr])                     \n\t"
 
