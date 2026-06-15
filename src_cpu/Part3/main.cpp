@@ -173,19 +173,6 @@ int main()
 
     auto st = std::chrono::high_resolution_clock::now();
 
-    // ---------------------------------------------------------
-    // Part 3:
-    // 一次平行計算 K 個 output windows
-    //
-    // lane 0 -> window i
-    // lane 1 -> window i + 1
-    // lane 2 -> window i + 2
-    // ...
-    //
-    // 每個 lane 各自累加自己的 correlation result
-    // 不使用 vector reduction
-    // ---------------------------------------------------------
-
     int i = 0;
 
     for (; i + K <= num_windows; i += K)
@@ -195,11 +182,8 @@ int main()
 
         size_t vl = 0;
 
-        // rx[i+j], rx[i+1+j], rx[i+2+j]...
-        // 彼此相差 1 個 float，所以 stride = 4 bytes
         const long stride_bytes = sizeof(float);
 
-        // 設定 VL = K，並初始化 vector accumulator v24 = 0
         asm volatile(
             "vsetvli %[vl], %[avl], e32, m1, ta, ma \n\t"
             "flw f0, (%[zero_ptr])                  \n\t"
@@ -209,7 +193,6 @@ int main()
               [zero_ptr] "r"(&zero)
             : "f0", "memory");
 
-        // 保險檢查：如果 VL 不等於 K，代表目前 vector length 不支援這個 K
         if ((int)vl != K)
         {
             std::cout << "錯誤：目前 RVV VL 不支援 K = " << K << std::endl;
@@ -217,27 +200,16 @@ int main()
             return 1;
         }
 
-        // 每個 j 做一次 across-K SIMD accumulation
         for (int j = 0; j < PREAMBLE_LEN; ++j)
         {
             const float *ptr_p = PREAMBLE + j;
             const float *ptr_rx = rx_pattern_0 + i + j;
 
             asm volatile(
-                // preamble[j] 是 scalar，所有 lane 共用同一個係數
                 "flw f1, (%[ptr_p])                    \n\t"
 
-                // strided load:
-                // v16[0] = rx[i + j]
-                // v16[1] = rx[i + 1 + j]
-                // v16[2] = rx[i + 2 + j]
-                // ...
                 "vlse32.v v16, (%[ptr_rx]), %[stride]  \n\t"
 
-                // 每個 lane 自己累加自己的 window
-                // v24[lane] += preamble[j] * v16[lane]
-                //
-                // 用 vfmacc.vf 可以避免先把 preamble[j] broadcast 成 vector
                 "vfmacc.vf v24, f1, v16                \n\t"
                 :
                 : [ptr_p] "r"(ptr_p),
@@ -246,14 +218,12 @@ int main()
                 : "f1", "memory");
         }
 
-        // 不做 reduction，直接把 K 個 lane 的結果存出來
         asm volatile(
             "vse32.v v24, (%[out_ptr]) \n\t"
             :
             : [out_ptr] "r"(sums)
             : "memory");
 
-        // 檢查這 K 個 output windows 的最大值
         for (int t = 0; t < K; ++t)
         {
             int idx = i + t;
@@ -267,7 +237,6 @@ int main()
         }
     }
 
-    // 處理最後不足 K 個 windows 的尾巴，用 scalar 補完
     for (; i < num_windows; ++i)
     {
         float sum = 0.0f;
